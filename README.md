@@ -1,5 +1,4 @@
-# PhalkTools - WoW Forever
-
+# PhalkTools
 A quality-of-life addon with independent modules.
 
 <img width="1553" height="1015" alt="image" src="https://github.com/user-attachments/assets/4763aa9e-80d2-4231-9ce3-7df7e71d8ba8" />
