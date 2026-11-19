@@ -63,9 +63,6 @@ by a secure visibility driver. Checks and settings changes resume after combat.
 The herb glow module was removed. During an update, its soft-target settings
 are restored if they still match the values applied by the addon.
 
-For a first-time installation, restart the WoW client to load the new
-`.toc` file. Settings are stored in `PhalkToolsDB`.
-
 ## Unit Frames
 
 In `/pt`, enable **Unit Frames** and open the corresponding subcategory.
