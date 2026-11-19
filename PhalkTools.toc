@@ -1,0 +1,19 @@
+## Interface: 16001
+## Title: PhalkTools
+## Notes: Quality-of-life improvements for WoW Forever, including buff reminders and customizable unit frames, action bars, nameplates and the Personal Resource Display.
+## Author: Phalk
+## Version: 0.10.0
+## SavedVariables: PhalkToolsDB
+## Category: Miscellaneous
+## IconTexture: Interface\Icons\INV_Misc_Herb_01
+## AddonCompartmentFunc: PhalkTools_Open
+
+Core.lua
+Reminders.lua
+PersonalResource.lua
+UnitFrames.lua
+TextureBars.lua
+PlayerBuffs.lua
+ActionBars.lua
+Nameplates.lua
+Settings.lua
