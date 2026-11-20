@@ -6,9 +6,34 @@ local states = setmetatable({}, { __mode = "k" })
 local refreshing, queued = false, false
 local restyling = false
 local unpack = unpack or table.unpack
+local combatTextLayers = setmetatable({}, { __mode = "k" })
 
 local function Usable(object)
     return object and not (object.IsForbidden and object:IsForbidden())
+end
+
+local function SetCombatTextLayer(textFrame, enabled, level)
+    if not Usable(textFrame) or not textFrame.SetFrameStrata then return end
+    local saved = combatTextLayers[textFrame]
+    if enabled then
+        if not saved then
+            saved = { strata = textFrame:GetFrameStrata(), level = textFrame:GetFrameLevel() }
+            combatTextLayers[textFrame] = saved
+        end
+        textFrame:SetFrameStrata("HIGH")
+        if level then textFrame:SetFrameLevel(math.max(saved.level, level)) end
+    elseif saved then
+        textFrame:SetFrameStrata(saved.strata)
+        textFrame:SetFrameLevel(saved.level)
+        combatTextLayers[textFrame] = nil
+    end
+end
+
+local function RaiseUnitCombatText(frame, content, enabled)
+    if not frame then return end
+    local main = content and (content.PlayerFrameContentMain or content.TargetFrameContentMain)
+    local indicator = main and main.HitIndicator or frame.HitIndicator
+    SetCombatTextLayer(indicator, enabled, frame:GetFrameLevel() + 32)
 end
 
 local function Remember(state, object)
@@ -377,8 +402,10 @@ local function LayoutStatusHeader(frame, player, state)
         Icon(contextual.RaidTargetIcon, x, y)
     end
     x, y = Slot(size)
-    Icon(contextual.PrestigePortrait, x, y, 16, 17)
-    Icon(contextual.PrestigeBadge, x, y + 3, 10, 10)
+    if not player then
+        Icon(contextual.PrestigePortrait, x, y, 16, 17)
+        Icon(contextual.PrestigeBadge, x, y + 3, 10, 10)
+    end
     x, y = Slot(size)
     Icon(contextual.LeaderIcon, x, y)
     Icon(contextual.GuideIcon, x, y)
@@ -407,7 +434,11 @@ local function LayoutStatusHeader(frame, player, state)
         Icon(contextual.BossIcon, x, y)
         Icon(contextual.QuestIcon, x, y)
         x, y = Slot(size)
-        Icon(contextual.PetBattleIcon, x, y)
+        if frame == TargetFrame then
+            Icon(contextual.PetBattleIcon, -34, 9)
+        else
+            Icon(contextual.PetBattleIcon, x, y)
+        end
         x, y = Slot(size)
         Icon(contextual.PingIconFrame, x, y)
         x, y = Slot(49)
@@ -435,10 +466,18 @@ local function LayoutStatusHeader(frame, player, state)
     if Usable(level) then
         local pvp = (main and main.PvpBackgroundIcon) or contextual.PvpBackgroundIcon
             or contextual.PVPIcon or contextual.PvpIcon or (player and _G.PlayerPVPIcon)
-        if Usable(pvp) then
-            Move(state, pvp, "CENTER", health, "TOPRIGHT", -14, 17, 30, 30)
+        if not player and Usable(pvp) then
+            Move(state, pvp, "CENTER", health, "TOPRIGHT", frame == TargetFrame and -12 or -14, 17, 30, 30)
         end
         if player then
+            local playerPvP = contextual.PVPIcon or contextual.PvpIcon or _G.PlayerPVPIcon
+            local pvpX = Usable(pvp) and -14 or -16
+            for _, icon in pairs({ background = pvp, faction = playerPvP, prestige = contextual.PrestigePortrait }) do
+                if Usable(icon) then Move(state, icon, "CENTER", health, "TOPRIGHT", pvpX, 17, 30, 30) end
+            end
+            if Usable(contextual.PrestigeBadge) then
+                Move(state, contextual.PrestigeBadge, "CENTER", health, "TOPRIGHT", pvpX, 17, 10, 10)
+            end
             local timer = _G.PlayerPVPTimerText or contextual.PvpTimerText
             if Usable(timer) then
                 Move(state, timer, "BOTTOM", Usable(pvp) and pvp or level,
@@ -464,8 +503,12 @@ local function LayoutStatusHeader(frame, player, state)
         local anchor = Usable(pvp) and pvp or health
         local anchorPoint = Usable(pvp) and "CENTER" or "TOPRIGHT"
         state.levelMirror:ClearAllPoints()
-        state.levelMirror:SetPoint("CENTER", anchor, anchorPoint,
-            Usable(pvp) and 2 or -14, Usable(pvp) and 0 or 17)
+        if player then
+            state.levelMirror:SetPoint("CENTER", health, "TOPRIGHT", Usable(pvp) and -12 or -14, 17)
+        else
+            state.levelMirror:SetPoint("CENTER", anchor, anchorPoint,
+                Usable(pvp) and (frame == TargetFrame and 0 or 2) or -14, Usable(pvp) and 0 or 17)
+        end
         state.levelMirror:SetSize(30, 30)
         state.levelMirror:SetText(level:GetText())
         state.levelMirror:SetShown(level:IsShown())
@@ -627,6 +670,14 @@ local function StyleBar(state, bar, border, path, unit, power)
         end
         edge:SetShown(border ~= "none" and border ~= "default")
     end
+end
+
+local function StyleUnitBars(state, health, power, unit)
+    local db = ns.db
+    local path = ns.barTextures and ns.barTextures[db.unitFramesTexture]
+    StyleBar(state, health, db.unitFramesBorder, path, unit, false)
+    StyleBar(state, power, db.unitFramesBorder, path, unit, true)
+    return path
 end
 
 local function StyleShadow(frame, state, health, power, unit)
@@ -867,9 +918,7 @@ local function ApplyTargetVisual(frame, state, main, container, nativeHealth, na
     visual.power:ClearAllPoints()
     visual.power:SetPoint("TOPLEFT", visual.health, "BOTTOMLEFT", 0, -db.unitFramesSpacing)
     visual.power:SetSize(db.unitFramesWidth, db.unitFramesPowerHeight)
-    local path = ns.barTextures and ns.barTextures[db.unitFramesTexture]
-    StyleBar(state, visual.health, db.unitFramesBorder, path, unit, false)
-    StyleBar(state, visual.power, db.unitFramesBorder, path, unit, true)
+    local path = StyleUnitBars(state, visual.health, visual.power, unit)
     visual.health:Show()
     visual.power:Show()
     if visual.textOverlay then visual.textOverlay:Show() end
@@ -1130,26 +1179,17 @@ local function Apply(frame, player, unit)
         ApplyTargetVisual(frame, state, main, container, health, power, unit)
         return
     end
-    local border = db.unitFramesBorder
-    local texture = db.unitFramesTexture
-    local path = ns.barTextures and ns.barTextures[texture]
-    StyleBar(state, health, border, path, unit, false)
-    StyleBar(state, power, border, path, unit, true)
+    local path = StyleUnitBars(state, health, power, unit)
     LayoutBarText(state, health, container or health, false)
     LayoutBarText(state, power, power, true)
     -- The player's incoming-heal segments have their own atlas and tint.
     -- Replacing their fill with the bar texture obscures that visual.
     ns.StyleHealPrediction(health, player and nil or path)
     state.predictionHealth = health
-    if player and container then
+    if unit ~= "targettarget" and container then
         StyleTargetPredictionMask(state, container, health)
-        RectangularMask(state, container.HealthBarMask, health)
-    elseif not player and unit ~= "targettarget" and container then
-        StyleTargetPredictionMask(state, container, health)
-        RectangularMask(state, container.HealthBarMask, health)
-    else
-        RectangularMask(state, container and container.HealthBarMask, health)
     end
+    RectangularMask(state, container and container.HealthBarMask, health)
 
     if unit == "targettarget" then
         LayoutTargetOfTarget(frame, state, health, power)
@@ -1237,6 +1277,12 @@ function ns.RefreshUnitFrames()
     refreshing = true
     local ok, message = pcall(function()
         local target = _G.TargetFrame
+        local player = _G.PlayerFrame
+        local stylePlayer = ns.db.enabledUnitFrames and ns.db.unitFramesPlayer
+        local styleTarget = ns.db.enabledUnitFrames and ns.db.unitFramesTarget
+        RaiseUnitCombatText(player, player and player.PlayerFrameContent, stylePlayer)
+        RaiseUnitCombatText(target, target and target.TargetFrameContent, styleTarget)
+        SetCombatTextLayer(_G.CombatText, stylePlayer or styleTarget)
         local tot = (target and target.totFrame) or _G.TargetFrameToT or _G.TargetofTargetFrame
         for _, entry in ipairs({ { _G.PlayerFrame, "unitFramesPlayer", true, "player" },
             { target, "unitFramesTarget", false, "target" },

@@ -99,6 +99,28 @@ end
 
 local textOverlays = setmetatable({}, { __mode = "k" })
 local percentCurve
+local function SetResourceAmount(text, value, abbreviate)
+    if abbreviate and AbbreviateLargeNumbers then
+        local ok, formatted = pcall(AbbreviateLargeNumbers, value)
+        if ok then
+            text:SetText(formatted)
+            return
+        end
+    end
+    text:SetFormattedText("%d", value)
+end
+local function UpdateEnergyText()
+    if not display or not display:IsVisible() or not ns.db then return end
+    local choices = ns.db.personalResourceNative
+    local texts = display.PowerBar and textOverlays[display.PowerBar]
+    if not choices or not choices.ShowBarText or not texts or not texts.Right:IsVisible() then return end
+    local powerType = UnitPowerType("player")
+    local energy = Enum and Enum.PowerType and Enum.PowerType.Energy or 3
+    if ns.Plain(powerType) and powerType == energy then
+        texts.Right:SetFormattedText("%d", UnitPower("player", energy))
+    end
+end
+
 local function UpdateNativeText()
     if not display or not display.hasBeenSetup then return end
     local choices = ns.db.personalResourceNative
@@ -134,15 +156,16 @@ local function UpdateNativeText()
                     percentCurve:AddPoint(1, 100)
                 end
                 if key == "health" then
-                    texts.Right:SetFormattedText("%d", UnitHealth("player"))
+                    SetResourceAmount(texts.Right, UnitHealth("player"), bar.capNumericDisplay ~= false)
                     if percentCurve and UnitHealthPercent then
                         texts.Left:SetFormattedText("%.0f%%", UnitHealthPercent("player", false, percentCurve))
                         texts.Left:SetShown(true)
                     end
                 elseif key == "power" then
-                    texts.Right:SetFormattedText("%d", UnitPower("player"))
                     local powerType = UnitPowerType("player")
-                    if powerType == 0 and percentCurve and UnitPowerPercent then
+                    local isMana = ns.Plain(powerType) and powerType == 0
+                    SetResourceAmount(texts.Right, UnitPower("player"), isMana and bar.capNumericDisplay ~= false)
+                    if isMana and percentCurve and UnitPowerPercent then
                         texts.Left:SetFormattedText("%.0f%%", UnitPowerPercent("player", powerType, false, percentCurve))
                         texts.Left:SetShown(true)
                     end
@@ -429,8 +452,13 @@ function ns.InitPersonalResource()
     frame:RegisterUnitEvent("UNIT_HEALTH", "player")
     frame:RegisterUnitEvent("UNIT_MAXHEALTH", "player")
     frame:RegisterUnitEvent("UNIT_POWER_UPDATE", "player")
+    frame:RegisterUnitEvent("UNIT_POWER_FREQUENT", "player")
     frame:RegisterUnitEvent("UNIT_MAXPOWER", "player")
     frame:SetScript("OnEvent", function(_, event)
+        if event == "UNIT_POWER_FREQUENT" then
+            UpdateEnergyText()
+            return
+        end
         Attach()
         if event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_REGEN_ENABLED" or event == "ADDON_LOADED" then
             ns.RefreshPersonalResource()
@@ -439,5 +467,6 @@ function ns.InitPersonalResource()
             UpdateNativeText()
         end
     end)
+    C_Timer.NewTicker(0.05, UpdateEnergyText)
     Attach()
 end

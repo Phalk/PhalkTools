@@ -2,7 +2,7 @@
 ## Title: PhalkTools
 ## Notes: Quality-of-life improvements, including buff reminders and customizable unit frames, action bars, nameplates and the Personal Resource Display.
 ## Author: Phalk
-## Version: 0.10.0
+## Version: 0.11.0
 ## SavedVariables: PhalkToolsDB
 ## Category: Miscellaneous
 ## IconTexture: Interface\Icons\INV_Misc_Herb_01
@@ -15,5 +15,7 @@ UnitFrames.lua
 TextureBars.lua
 PlayerBuffs.lua
 ActionBars.lua
+DamageMeter.lua
+Chat.lua
 Nameplates.lua
 Settings.lua

@@ -1,5 +1,51 @@
 local _, ns = ...
 
+local combatSettings
+local featureSettings = {}
+
+function ns.OpenCombatSettings()
+    if combatSettings and combatSettings:IsShown() then
+        combatSettings:Hide()
+        return
+    end
+    if not combatSettings then
+        local panel = CreateFrame("Frame", "PhalkToolsCombatSettings", UIParent, "BackdropTemplate")
+        panel:SetSize(385, 90 + #featureSettings * 28)
+        panel:SetPoint("CENTER")
+        panel:SetFrameStrata("DIALOG")
+        panel:EnableMouse(true)
+        panel:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8" })
+        panel:SetBackdropColor(0.04, 0.04, 0.05, 0.98)
+        local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        title:SetPoint("TOPLEFT", 18, -16)
+        title:SetText("PhalkTools")
+        local help = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        help:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -10)
+        help:SetText("Alterações são aplicadas ao sair de combate.")
+        local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
+        close:SetPoint("TOPRIGHT")
+        close:SetScript("OnClick", function() panel:Hide() end)
+        panel.rows = {}
+        for i, feature in ipairs(featureSettings) do
+            local row = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+            row:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -62 - (i - 1) * 28)
+            local label = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            label:SetPoint("LEFT", row, "RIGHT", 4, 0)
+            label:SetText(feature.label)
+            row:SetScript("OnClick", function(self)
+                feature.setting:SetValue(self:GetChecked() == true)
+            end)
+            panel.rows[i] = row
+        end
+        table.insert(UISpecialFrames, panel:GetName())
+        combatSettings = panel
+    end
+    for i, feature in ipairs(featureSettings) do
+        combatSettings.rows[i]:SetChecked(ns.db[feature.key])
+    end
+    combatSettings:Show()
+end
+
 -- A single Settings object backs each module's checkbox on both the overview
 -- and its own tab. Switching in either place immediately updates the other.
 function ns.RegisterSettings()
@@ -14,6 +60,8 @@ function ns.RegisterSettings()
     local units, unitsLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Unit Frames")
     local textureBars, textureBarsLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Texture Bars")
     local plates, platesLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Nameplates")
+    local meter, meterLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Damage Meter")
+    local chat, chatLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Chat")
 
     local function Header(layout, title)
         if CreateSettingsListSectionHeaderInitializer then
@@ -25,6 +73,9 @@ function ns.RegisterSettings()
         local setting = Settings.RegisterAddOnSetting(category, "PhalkTools_" .. key, key,
             ns.db, type(ns.defaults[key]), label, ns.defaults[key])
         setting:SetValueChangedCallback(function() ns.Refresh() end)
+        if category == main and type(ns.defaults[key]) == "boolean" then
+            featureSettings[#featureSettings + 1] = { key = key, label = label, setting = setting }
+        end
         return setting
     end
 
@@ -160,6 +211,8 @@ function ns.RegisterSettings()
     }, "Layered reflections, specular highlights and shadows inspired by Masque skin finishes.")
     Checkbox(actions, "actionBarsHideArt", "Remove decorative art", "Hides the decorative frames and dividers on the main action bar, bags and micro menu.")
     Checkbox(actions, "actionBarsHotkeys", "Show keybinds", "Shows the keys assigned to each button.")
+    Checkbox(actions, "actionBarsCooldownHotkeys", "Show keybinds in Cooldown Manager",
+        "Shows the key assigned to the matching action bar spell on Cooldown Manager icons.")
     Checkbox(actions, "actionBarsMacros", "Show macro names", "Shows the name beneath each macro.")
     Checkbox(actions, "actionBarsCounts", "Show counts", "Shows item counts and charges.")
     local function ActionSlider(key, label, low, high, suffix, help)
@@ -180,6 +233,45 @@ function ns.RegisterSettings()
     ActionSlider("actionBarsZoom", "Icon zoom", 0, 15, "%", "Crops the inner margins of spell icons.")
     ActionSlider("actionBarsFontSize", "Text size", 8, 18, " px", "Size of keybinds, names and counts.")
     Header(actionsLayout, "Position, rows and spacing are controlled in WoW Edit Mode. Changes made in combat are applied afterward. Disabling restores the previous appearance.")
+
+    local meterOn = Checkbox(main, "enabledDamageMeter", "Damage Meter",
+        "Customizes Blizzard's Damage Meter. Open the subcategory to adjust its appearance and unlock movement.")
+    Header(meterLayout, "DAMAGE METER")
+    Settings.CreateCheckbox(meter, meterOn, "Enables Damage Meter styling and settings.")
+    Checkbox(meter, "damageMeterLockMenu", "Add Lock / Unlock to the options context menu",
+        "Adds Lock / Unlock to the Damage Meter options menu.")
+    Dropdown(meter, "damageMeterStyle", "Visual style", {
+        { "default", "WoW Default" }, { "minimal", "Thin" }, { "bordered", "Bordered" },
+    }, "Select the built-in Damage Meter presentation style.")
+    Dropdown(meter, "damageMeterBorder", "Bar borders", {
+        { "default", "WoW Default" }, { "none", "No borders" },
+        { "thin", "Thin black" }, { "thick", "Thick black" },
+    }, "Choose the outline around each Damage Meter bar.")
+    Dropdown(meter, "damageMeterTexture", "Bar texture", {
+        { "default", "WoW Default" }, { "flat", "Flat" }, { "smooth", "Smooth" },
+        { "raid", "Raid Bar" }, { "gradient", "Gradient" }, { "gloss", "Glossy" },
+        { "soft", "Satin" }, { "metal", "Metallic" }, { "striped", "Striped" }, { "beveled", "Beveled" },
+    }, "Changes the fill texture of Damage Meter rows.")
+    Checkbox(meter, "damageMeterClassColors", "Class colors", "Uses class colors for player rows.")
+    PixelSlider(meter, "damageMeterBarHeight", "Bar height", 12, 45, "Sets the height of Damage Meter rows.")
+    Checkbox(meter, "damageMeterIcons", "Show bar icons", "Shows spell and ability icons in Damage Meter rows.")
+    PixelSlider(meter, "damageMeterBackground", "Background opacity", 0, 100,
+        "Adjusts the Damage Meter background transparency.")
+    PixelSlider(meter, "damageMeterOpacity", "Window opacity", 0, 100,
+        "Adjusts the opacity of the Damage Meter window.")
+    PixelSlider(meter, "damageMeterSpacing", "Bar spacing", 0, 12,
+        "Sets the spacing between Damage Meter rows.")
+    PixelSlider(meter, "damageMeterTextSize", "Text size", 8, 20,
+        "Sets the text size used by Damage Meter rows.")
+    Header(meterLayout, "Changes made in combat are applied when combat ends.")
+
+    Header(chatLayout, "CHAT WINDOW")
+    local chatOn = Checkbox(main, "chatLockMenu", "Chat", "Restores Lock / Unlock in the chat tab menu.")
+    Settings.CreateCheckbox(chat, chatOn, "Restore old chat Lock / Unlock")
+    Checkbox(chat, "chatCopyText", "Copy chat text",
+        "Adds Copy chat text to the tab menu. Select text and press Ctrl+C.")
+    Checkbox(chat, "chatKeepHistory", "Keep chat history for 24 hours",
+        "Restores saved messages in each chat tab on login or reload. Turning this off clears the saved history.")
 
     local platesOn = Checkbox(main, "enabledNameplates", "Nameplates",
         "Customizes the original nameplates above units. Open the subcategory to customize.")

@@ -20,6 +20,7 @@ ns.defaults = {
     actionBarsFinishIntensity = 75,
     actionBarsHideArt = true,
     actionBarsHotkeys = true,
+    actionBarsCooldownHotkeys = true,
     actionBarsMacros = false,
     actionBarsCounts = true,
     actionBarsScale = 100,
@@ -87,6 +88,23 @@ ns.defaults = {
     nameplatesNameFontSize = 0,
     nameplatesComboPoints = true,
     enabledPersonalResource = false,
+    enabledDamageMeter = false,
+    damageMeterUnlocked = false,
+    damageMeterStyle = "default",
+    damageMeterBorder = "default",
+    damageMeterTexture = "default",
+    damageMeterBarHeight = 25,
+    damageMeterClassColors = true,
+    damageMeterIcons = true,
+    damageMeterBackground = 100,
+    damageMeterOpacity = 100,
+    damageMeterSpacing = 2,
+    damageMeterTextSize = 12,
+    chatUnlocked = false,
+    chatLockMenu = true,
+    chatCopyText = true,
+    chatKeepHistory = false,
+    damageMeterLockMenu = true,
     personalResourceHideFull = true,
     personalResourceBorder = "default",
     personalResourceTexture = "default",
@@ -152,6 +170,8 @@ local modules = {
     { "TextureBars", "InitTextureBars", "RefreshTextureBars" },
     { "PlayerBuffs", "InitPlayerFrameBuffs", "RefreshPlayerFrameBuffs" },
     { "ActionBars", "InitActionBars", "RefreshActionBars" },
+    { "DamageMeter", "InitDamageMeter", "RefreshDamageMeter" },
+    { "Chat", "InitChat", "RefreshChat" },
     { "Nameplates", "InitNameplates", "RefreshNameplates" },
 }
 local initialized = {}
@@ -170,11 +190,30 @@ end
 local function Start()
     PhalkToolsDB = type(PhalkToolsDB) == "table" and PhalkToolsDB or {}
     ns.db = PhalkToolsDB
+    if ns.db.realmNamesPreviousValue == "1" and C_CVar then
+        local function RestoreRealmNameCVar()
+            local ok, current = pcall(C_CVar.GetCVar, "nameplateShowFriendlyRealmName")
+            if ok and current == "0" then pcall(C_CVar.SetCVar, "nameplateShowFriendlyRealmName", "1") end
+        end
+        if InCombatLockdown() then
+            local restore = CreateFrame("Frame")
+            restore:RegisterEvent("PLAYER_REGEN_ENABLED")
+            restore:SetScript("OnEvent", function(self)
+                self:UnregisterAllEvents()
+                RestoreRealmNameCVar()
+            end)
+        else
+            RestoreRealmNameCVar()
+        end
+    end
+    ns.db.realmNamesPreviousValue = nil
+    ns.db.enabledRealmNames = nil
     ns.db.unitFramesUsePersonalStyle = nil
     ns.db.personalResourceFollowNameplate = nil
     ns.db.personalResourceNameplateGap = nil
     ns.db.personalResourceCustomSpacing = nil
     if type(ns.db.customReminders) ~= "table" then ns.db.customReminders = {} end
+    if type(ns.db.chatPositions) ~= "table" then ns.db.chatPositions = {} end
     -- Retire the old fixed reminders without inserting them into the user's list.
     ns.db.remindMark, ns.db.remindThorns, ns.db.remindFindHerbs = nil, nil, nil
     for key, value in pairs(ns.defaults) do
@@ -220,7 +259,21 @@ local function Start()
     ns.Refresh()
 end
 
+local pendingRefresh
 function ns.Refresh()
+    if InCombatLockdown() then
+        if not pendingRefresh then
+            print("PhalkTools: saia de combate para aplicar as alterações.")
+            pendingRefresh = CreateFrame("Frame")
+            pendingRefresh:RegisterEvent("PLAYER_REGEN_ENABLED")
+            pendingRefresh:SetScript("OnEvent", function(self)
+                self:UnregisterAllEvents()
+                pendingRefresh = nil
+                ns.Refresh()
+            end)
+        end
+        return
+    end
     for _, module in ipairs(modules) do
         if initialized[module[1]] then
             RunSafely(module[1] .. " refresh", ns[module[3]], module[1] == "PlayerBuffs" and true or nil)
@@ -229,6 +282,10 @@ function ns.Refresh()
 end
 
 function PhalkTools_Open()
+    if InCombatLockdown() and ns.OpenCombatSettings then
+        ns.OpenCombatSettings()
+        return
+    end
     if ns.categoryID and Settings and Settings.OpenToCategory then
         Settings.OpenToCategory(ns.categoryID)
     else
@@ -241,6 +298,14 @@ SLASH_PHALKTOOLS2 = "/pt"
 SlashCmdList.PHALKTOOLS = function(message)
     if message and message:match("^%s*buffs%s*$") then
         ns.OpenReminderEditor()
+    elseif message and message:match("^%s*cdm%s*$") and ns.PrintCooldownHotkeyStatus then
+        ns.PrintCooldownHotkeyStatus()
+    elseif message and message:match("^%s*cdm%s+debug%s*$") and ns.PrintCooldownHotkeyStatus then
+        ns.PrintCooldownHotkeyStatus(true)
+    elseif message and message:match("^%s*meter%s*$") and ns.PrintDamageMeterStatus then
+        ns.PrintDamageMeterStatus()
+    elseif message and message:match("^%s*copy%s*$") and ns.CopyCurrentChat then
+        ns.CopyCurrentChat()
     else
         PhalkTools_Open()
     end

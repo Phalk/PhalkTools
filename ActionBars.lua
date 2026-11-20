@@ -1,6 +1,9 @@
 local _, ns = ...
 
 local buttons, roots = {}, {}
+local cooldownManagerHooks = setmetatable({}, { __mode = "k" })
+local cooldownLabels = setmetatable({}, { __mode = "k" })
+local rangeSources = setmetatable({}, { __mode = "k" })
 local alphaState = setmetatable({}, { __mode = "k" })
 local refreshing, queued, editing = false, false, false
 local finishes = {
@@ -56,6 +59,12 @@ local function Region(button, key)
     return (overlay and overlay[key]) or button[key] or (name and _G[name .. key])
 end
 
+local function ButtonIcon(button)
+    local icon = button.icon or button.Icon or Region(button, "Icon")
+    if Usable(icon) and icon.Icon and icon.Icon.SetTexCoord then return icon.Icon end
+    return icon
+end
+
 local shapePath = finishPath .. "Shapes\\"
 
 local function RestoreMasks(state)
@@ -85,20 +94,65 @@ local function RestoreCooldownSwipes(state)
     for cooldown, saved in pairs(state.cooldownSwipes) do
         cooldown:SetSwipeTexture(saved.texture, unpack(saved.color))
         if saved.circular ~= nil then cooldown:SetUseCircularEdge(saved.circular) end
+        if saved.points then
+            cooldown:ClearAllPoints()
+            for _, point in ipairs(saved.points) do cooldown:SetPoint(unpack(point, 1, 5)) end
+        end
     end
     wipe(state.cooldownSwipes)
 end
 
+local function RestoreProcGlow(state)
+    if not state.procGlow then return end
+    for object, saved in pairs(state.procGlow) do
+        object:ClearAllPoints()
+        object:SetSize(saved.width, saved.height)
+        for _, point in ipairs(saved.points) do object:SetPoint(unpack(point, 1, 5)) end
+    end
+    wipe(state.procGlow)
+end
+
+local function AlignProcGlow(button, state)
+    local alert = button.SpellActivationAlert
+    local icon = state.relative
+    if not Usable(alert) or not Usable(icon) or (InCombatLockdown() and alert:IsProtected()) then return end
+    local width, height = icon:GetSize()
+    if not ns.Plain(width) or not ns.Plain(height) or width <= 0 or height <= 0 then return end
+    state.procGlow = state.procGlow or {}
+    local function SaveLayout(object)
+        if state.procGlow[object] then return end
+        local w, h = object:GetSize()
+        local points = {}
+        for i = 1, object:GetNumPoints() do points[i] = { object:GetPoint(i) } end
+        state.procGlow[object] = { width = w, height = h, points = points }
+    end
+    SaveLayout(alert)
+    -- The flipbook has transparent margins. Blizzard gives its frame a 40% bleed.
+    alert:ClearAllPoints()
+    alert:SetPoint("TOPLEFT", icon, "TOPLEFT", -width * 0.2, height * 0.2)
+    alert:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", width * 0.2, -height * 0.2)
+    if Usable(alert.ProcAltGlow) then
+        SaveLayout(alert.ProcAltGlow)
+        alert.ProcAltGlow:ClearAllPoints()
+        alert.ProcAltGlow:SetAllPoints(alert)
+    end
+end
+
 local function StyleCooldownSwipes(button, state)
-    if state.nativeArt or state.radius == 0 then return end
+    if state.nativeArt then return end
     state.cooldownSwipes = state.cooldownSwipes or {}
     local shape = shapePath .. "Mask-" .. state.radius .. ".tga"
     for _, entry in ipairs({
-        { button.cooldown or button.Cooldown or Region(button, "Cooldown"), { 0, 0, 0, 0.64 } },
+        { button.cooldown or button.Cooldown or Region(button, "Cooldown")
+            or (button.Icon and (button.Icon.Cooldown or Region(button.Icon, "Cooldown"))), { 0, 0, 0, 0.64 } },
         { button.lossOfControlCooldown, { 0.17, 0, 0, 0.64 } },
     }) do
         local cooldown, color = entry[1], entry[2]
-        if Usable(cooldown) and cooldown.SetSwipeTexture and not state.cooldownSwipes[cooldown] then
+        local styled = Usable(cooldown) and state.cooldownSwipes[cooldown]
+        if styled and styled.points and state.relative then
+            cooldown:ClearAllPoints()
+            cooldown:SetAllPoints(state.relative)
+        elseif Usable(cooldown) and cooldown.SetSwipeTexture and not styled then
             local texture = cooldown.GetSwipeTexture and cooldown:GetSwipeTexture()
             if cooldown.GetSwipeColor then
                 local r, g, b, a = cooldown:GetSwipeColor()
@@ -107,6 +161,12 @@ local function StyleCooldownSwipes(button, state)
             end
             local saved = { texture = ns.Plain(texture) and (type(texture) == "string" or type(texture) == "number") and texture or "", color = color }
             state.cooldownSwipes[cooldown] = saved
+            if state.relative then
+                saved.points = {}
+                for i = 1, cooldown:GetNumPoints() do saved.points[i] = { cooldown:GetPoint(i) } end
+                cooldown:ClearAllPoints()
+                cooldown:SetAllPoints(state.relative)
+            end
             cooldown:SetSwipeTexture(shape, unpack(color))
             if cooldown.SetUseCircularEdge and state.radius == 50 then
                 saved.circular = cooldown.GetUseCircularEdge and cooldown:GetUseCircularEdge() or false
@@ -121,6 +181,7 @@ local function RestoreButton(button, state)
     state.active = false
     RestoreMasks(state)
     RestoreCooldownSwipes(state)
+    RestoreProcGlow(state)
     if state.roundBorder then state.roundBorder:Hide() end
     if state.nextMeleeRing then state.nextMeleeRing:Hide() end
     if state.background then state.background:Hide() end
@@ -156,8 +217,8 @@ local function RememberRegion(state, object)
     return state.regions[object]
 end
 
-local function StyleText(button, state, key, shown)
-    local object = Region(button, key)
+local function StyleText(button, state, key, shown, object)
+    object = object or Region(button, key)
     local saved = RememberRegion(state, object)
     if not saved then return end
     SetAlpha(object, shown and 1 or 0)
@@ -335,7 +396,7 @@ local function StyleCooldownFeedback(button, state)
         state.cooldownPulse, state.cooldownPulseAnim = pulse, anim
         if type(flash.Setup) == "function" then
             hooksecurefunc(flash, "Setup", function()
-                if not state.active then return end
+                if not state.active or InCombatLockdown() then return end
                 anim:Stop()
                 pulse:Show()
                 anim:Play()
@@ -410,9 +471,20 @@ local function ApplyNativeArt(button, state)
             if state.nativeArt then RestoreAlpha(object) else SetAlpha(object, 0) end
         end
     end
+    if state.isCooldownManager and not state.nativeArt then
+        for _, parent in ipairs({ button, button.Icon }) do
+            if Usable(parent) and parent.GetRegions then
+                for _, region in ipairs({ parent:GetRegions() }) do
+                    if Usable(region) and region.GetAtlas and region:GetAtlas() == "UI-HUD-CoolDownManager-IconOverlay" then
+                        if RememberRegion(state, region) then SetAlpha(region, 0) end
+                    end
+                end
+            end
+        end
+    end
 end
 
-local function StyleButton(button)
+local function StyleButton(button, isCooldownManager)
     local state = buttons[button]
     if not state then
         state = { regions = {} }
@@ -424,16 +496,17 @@ local function StyleButton(button)
         state.background:Hide()
         if type(button.UpdateButtonArt) == "function" then
             hooksecurefunc(button, "UpdateButtonArt", function()
-                if state.active then
+                if state.active and not InCombatLockdown() then
                     ApplyNativeArt(button, state)
                     StyleButtonFeedback(button, state)
+                    StyleCooldownSwipes(button, state)
                 end
             end)
         end
         local cast = button.SpellCastAnimFrame
         if Usable(cast) and type(cast.SetupAnimAtlases) == "function" then
             hooksecurefunc(cast, "SetupAnimAtlases", function()
-                if state.active then StyleCastFeedback(button, state) end
+                if state.active and not InCombatLockdown() then StyleCastFeedback(button, state) end
             end)
         end
         state.finish = button:CreateTexture(nil, "ARTWORK", nil, 1)
@@ -448,12 +521,13 @@ local function StyleButton(button)
     end
     RestoreButton(button, state)
     state.active = true
+    state.isCooldownManager = isCooldownManager == true
     local db = ns.db
     local border = db.actionBarsBorder
     local radius = math.floor(math.max(0, math.min(50, tonumber(db.actionBarsRadius) or 0)))
     state.nativeArt = border == "default" and radius == 0
     ApplyNativeArt(button, state)
-    local icon = button.icon or button.Icon or Region(button, "Icon")
+    local icon = ButtonIcon(button)
     if Usable(icon) then
         local saved = RememberRegion(state, icon)
         if not saved.coords then saved.coords = { icon:GetTexCoord() } end
@@ -509,15 +583,423 @@ local function StyleButton(button)
     state.roundBorder:SetVertexColor(r, g, b, 1)
     state.roundBorder:SetShown(shapedBorder)
     StyleButtonFeedback(button, state)
-    StyleNextMeleeRing(button, state)
-    StyleCastFeedback(button, state)
-    StyleInterruptFeedback(button, state)
+    if not isCooldownManager then
+        StyleNextMeleeRing(button, state)
+        StyleCastFeedback(button, state)
+        StyleInterruptFeedback(button, state)
+    end
     StyleCooldownSwipes(button, state)
+    AlignProcGlow(button, state)
     StyleCooldownFeedback(button, state)
     SetAlpha(button, db.actionBarsOpacity / 100)
-    StyleText(button, state, "HotKey", db.actionBarsHotkeys)
+    StyleText(button, state, "HotKey", not isCooldownManager and db.actionBarsHotkeys)
     StyleText(button, state, "Name", db.actionBarsMacros)
-    StyleText(button, state, "Count", db.actionBarsCounts)
+    local count
+    if isCooldownManager then
+        count = button.ChargeCount and button.ChargeCount.Current
+        if not count and button.GetApplicationsFontString then
+            count = button:GetApplicationsFontString()
+        end
+    end
+    StyleText(button, state, "Count", db.actionBarsCounts, count)
+end
+
+local function MirrorHotkeyRange(overlay, source)
+    if overlay.rangeSource and overlay.rangeSource ~= source then
+        rangeSources[overlay.rangeSource][overlay] = nil
+    end
+    overlay.rangeSource = source
+    if not source or not source.SetVertexColor then return end
+    local listeners = rangeSources[source]
+    if not listeners then
+        listeners = setmetatable({}, { __mode = "k" })
+        rangeSources[source] = listeners
+        hooksecurefunc(source, "SetVertexColor", function(_, r, g, b)
+            if not ns.Plain(r) or not ns.Plain(g) or not ns.Plain(b) then return end
+            for label in pairs(listeners) do label.text:SetVertexColor(r, g, b, 1) end
+        end)
+    end
+    listeners[overlay] = true
+    local getColor = source.GetVertexColor or source.GetTextColor
+    if getColor then
+        local ok, r, g, b = pcall(getColor, source)
+        if ok and ns.Plain(r) and ns.Plain(g) and ns.Plain(b) then
+            overlay.text:SetVertexColor(r, g, b, 1)
+        end
+    end
+end
+
+local function UpdateCooldownLabel(button, binding)
+    local overlay = cooldownLabels[button]
+    if not binding then
+        if overlay then
+            MirrorHotkeyRange(overlay, nil)
+            overlay:Hide()
+        end
+        return
+    end
+    local icon = ButtonIcon(button)
+    if not overlay then
+        overlay = CreateFrame("Frame", nil, button)
+        overlay:SetFrameStrata("HIGH")
+        local template = NumberFontNormalSmallGray and "NumberFontNormalSmallGray" or "NumberFontNormalSmall"
+        overlay.text = overlay:CreateFontString(nil, "OVERLAY", template)
+        overlay.text:SetPoint("TOPRIGHT", -2, -2)
+        overlay.text:SetJustifyH("RIGHT")
+        cooldownLabels[button] = overlay
+    end
+    overlay:SetAllPoints(icon)
+    overlay:SetFrameLevel(button:GetFrameLevel() + 20)
+    overlay.text:SetText(binding.text)
+    overlay:Show()
+    local action = binding.button
+    local source = action and (action.HotKey or Region(action, "HotKey"))
+    if source and source.GetFont then
+        local ok, font, _, flags = pcall(source.GetFont, source)
+        if ok and ns.Plain(font) and type(font) == "string" then
+            pcall(overlay.text.SetFont, overlay.text, font, ns.db.actionBarsFontSize, flags)
+        end
+    end
+    MirrorHotkeyRange(overlay, source)
+end
+
+local function CooldownSpellID(button, cooldownInfoByID, layoutCooldownID, spellCache)
+    if not button or type(button.GetSpellID) ~= "function" then return end
+    local cooldownID = layoutCooldownID
+    if type(button.GetCooldownID) == "function" then
+        local readable, assigned = pcall(button.GetCooldownID, button)
+        if readable and ns.Plain(assigned) and type(assigned) == "number" then cooldownID = assigned end
+    end
+    local ok, spellID = pcall(button.GetSpellID, button)
+    local current = ok and ns.Plain(spellID) and type(spellID) == "number" and spellID
+    if type(button.GetBaseSpellID) == "function" then
+        ok, spellID = pcall(button.GetBaseSpellID, button)
+        if ok and ns.Plain(spellID) and type(spellID) == "number" then
+            if cooldownID then spellCache[cooldownID] = spellID end
+            return current or spellID, current and "current" or "base", cooldownID
+        end
+    end
+    -- The viewer can create a pooled item before filling in its spell data.
+    -- Resolve its assigned cooldown directly when the client exposes that ID.
+    if cooldownID then
+        local info = cooldownInfoByID and cooldownInfoByID[cooldownID]
+        if not ns.Plain(info) and C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCooldownInfo then
+            local found, apiInfo = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, cooldownID)
+            if found then info = apiInfo end
+        end
+        if ns.Plain(info) and type(info) == "table" then
+            local base = info.spellID
+            if ns.Plain(base) and type(base) == "number" then
+                spellCache[cooldownID] = base
+                return current or base, current and "current" or "cooldown info", cooldownID
+            end
+        end
+        if current then return current, "current", cooldownID end
+        if spellCache[cooldownID] then return spellCache[cooldownID], "saved base", cooldownID end
+    end
+    if current then return current, "current" end
+    return nil, nil, cooldownID
+end
+
+local function GetViewerCooldownInfo()
+    local settings = _G.CooldownViewerSettings
+    if not settings or not settings.GetDataProvider then return end
+    local provider = settings:GetDataProvider()
+    local data = provider and provider.GetDisplayData and provider:GetDisplayData()
+    local info = ns.Plain(data) and data.cooldownInfoByID
+    if ns.Plain(info) and type(info) == "table" then return info end
+end
+
+local function ActionSpellIDs(button)
+    if not button or type(GetActionInfo) ~= "function" then return end
+    local slot = ns.Plain(button.action) and button.action or nil
+    if not slot and button.GetAttribute then
+        local ok, value = pcall(button.GetAttribute, button, "action")
+        if ok and ns.Plain(value) and type(value) == "number" then slot = value end
+    end
+    if not ns.Plain(slot) or type(slot) ~= "number" then return end
+    local ok, kind, id = pcall(GetActionInfo, slot)
+    if not ok then return end
+    if kind == "spell" and ns.Plain(id) and type(id) == "number" then return id end
+    if kind == "macro" and ns.Plain(id) and type(id) == "number" and type(GetMacroSpell) == "function" then
+        local good, first, second = pcall(GetMacroSpell, id)
+        if good then
+            if ns.Plain(first) and type(first) == "number" then return first end
+            if ns.Plain(second) and type(second) == "number" then return second end
+        end
+    end
+    if C_ActionBar and C_ActionBar.GetSpell then
+        local good, spellID = pcall(C_ActionBar.GetSpell, slot)
+        if good and ns.Plain(spellID) and type(spellID) == "number" and spellID > 0 then return spellID end
+    end
+end
+
+local bindingPrefixes = {
+    ActionButton = "ACTIONBUTTON", MultiBarBottomLeftButton = "MULTIACTIONBAR1BUTTON",
+    MultiBarBottomRightButton = "MULTIACTIONBAR2BUTTON", MultiBarRightButton = "MULTIACTIONBAR3BUTTON",
+    MultiBarLeftButton = "MULTIACTIONBAR4BUTTON", MultiBar5Button = "MULTIACTIONBAR5BUTTON",
+    MultiBar6Button = "MULTIACTIONBAR6BUTTON", MultiBar7Button = "MULTIACTIONBAR7BUTTON",
+}
+
+local function ReadActionHotkey(button, prefix, index)
+    local command = button and button.bindingAction
+    if not command and bindingPrefixes[prefix] then command = bindingPrefixes[prefix] .. index end
+    if GetBindingKey then
+        local key = command and GetBindingKey(command)
+        if not ns.Plain(key) and button and button:GetName() then
+            key = GetBindingKey("CLICK " .. button:GetName() .. ":LeftButton")
+        end
+        if ns.Plain(key) and type(key) == "string" then
+            if GetBindingText then
+                local ok, label = pcall(GetBindingText, key, 1)
+                if ok and ns.Plain(label) and type(label) == "string" and label ~= "" then return label end
+            end
+            return key
+        end
+    end
+    local region = button and Region(button, "HotKey")
+    local label = region and region.GetText and region:GetText()
+    if ns.Plain(label) and type(label) == "string" and label ~= "" and label ~= RANGE_INDICATOR then
+        return label
+    end
+end
+
+local function FindActionHotkeys()
+    local bySpell = {}
+    for _, group in ipairs(groups) do
+        for i = 1, group.count do
+            local actionButton = _G[group.prefix .. i]
+            local spellID = ActionSpellIDs(actionButton)
+            local text = ReadActionHotkey(actionButton, group.prefix, i)
+            if spellID and not bySpell[spellID] and ns.Plain(text) and type(text) == "string"
+                and text ~= "" and text ~= RANGE_INDICATOR then
+                local binding = { text = text, button = actionButton }
+                bySpell[spellID] = binding
+                if C_Spell and C_Spell.GetBaseSpell then
+                    local ok, base = pcall(C_Spell.GetBaseSpell, spellID)
+                    if ok and ns.Plain(base) and type(base) == "number" and not bySpell[base] then
+                        bySpell[base] = binding
+                    end
+                end
+            end
+        end
+    end
+    return bySpell
+end
+
+local function ActionHotkeyForSpell(spellID, bySpell)
+    if bySpell[spellID] then return bySpell[spellID] end
+    if not (C_ActionBar and C_ActionBar.FindSpellActionButtons) then return end
+    local ok, slots = pcall(C_ActionBar.FindSpellActionButtons, spellID)
+    if not ok or type(slots) ~= "table" then return end
+    for _, slot in ipairs(slots) do
+        for _, group in ipairs(groups) do
+            for i = 1, group.count do
+                local actionButton = _G[group.prefix .. i]
+                local actionSlot = actionButton and actionButton.action
+                if (not ns.Plain(actionSlot) or actionSlot ~= slot) and actionButton and actionButton.GetAttribute then
+                    local good, value = pcall(actionButton.GetAttribute, actionButton, "action")
+                    if good then actionSlot = value end
+                end
+                if ns.Plain(actionSlot) and actionSlot == slot then
+                    local text = ReadActionHotkey(actionButton, group.prefix, i)
+                    if ns.Plain(text) and type(text) == "string" and text ~= ""
+                        and text ~= RANGE_INDICATOR then return { text = text, button = actionButton } end
+                end
+            end
+        end
+    end
+end
+
+local function IsCooldownManagerItem(frame)
+    return Usable(frame) and type(frame.GetSpellID) == "function" and Usable(frame.Icon)
+        and frame.CreateTexture and frame.HookScript
+end
+
+local QueueCooldownHotkeys
+local lastHotkeyScan
+local viewerCooldownIDs = {}
+local hotkeyTrace = {}
+local function TraceHotkeyScan(message)
+    if #hotkeyTrace >= 12 then table.remove(hotkeyTrace, 1) end
+    hotkeyTrace[#hotkeyTrace + 1] = ("%.1fs %s"):format(GetTime(), message)
+end
+local function RefreshCooldownManagerButtons(labelsOnly)
+    local enabled = ns.db.enabledActionBars
+    local showKeys = enabled and ns.db.actionBarsCooldownHotkeys
+    if labelsOnly and not showKeys then
+        for _, overlay in pairs(cooldownLabels) do overlay:Hide() end
+    end
+    local bySpell = labelsOnly and showKeys and FindActionHotkeys() or {}
+    local cooldownInfoByID = labelsOnly and showKeys and GetViewerCooldownInfo()
+    local spellCache
+    if labelsOnly and showKeys then
+        local build = select(2, GetBuildInfo())
+        local cache = ns.db.cooldownSpellCache
+        if type(cache) ~= "table" or cache.build ~= build or type(cache.spells) ~= "table" then
+            cache = { build = build, spells = {} }
+            ns.db.cooldownSpellCache = cache
+        end
+        spellCache = cache.spells
+    end
+    local scan = { items = 0, visibleItems = 0, spells = 0, matches = 0, actionSpells = 0, errors = 0, details = {} }
+    if labelsOnly then
+        for _ in pairs(bySpell) do scan.actionSpells = scan.actionSpells + 1 end
+        lastHotkeyScan = scan
+    end
+    local viewerName, orderedIDs
+    local function StyleViewerItem(frame)
+        if IsCooldownManagerItem(frame) then
+            if not cooldownManagerHooks[frame] then
+                cooldownManagerHooks[frame] = true
+                frame:HookScript("OnShow", QueueRefresh)
+                if type(frame.OnCooldownIDSet) == "function" then
+                    hooksecurefunc(frame, "OnCooldownIDSet", QueueRefresh)
+                end
+                if type(frame.SetCooldownID) == "function" then
+                    hooksecurefunc(frame, "SetCooldownID", QueueCooldownHotkeys)
+                end
+                if type(frame.RefreshSpellTexture) == "function" then
+                    hooksecurefunc(frame, "RefreshSpellTexture", QueueCooldownHotkeys)
+                end
+            end
+            if labelsOnly then
+                scan.items = scan.items + 1
+                if frame:IsVisible() then scan.visibleItems = scan.visibleItems + 1 end
+                local spellID, source, cooldownID
+                if showKeys then
+                    local index = frame.layoutIndex
+                    local assigned = orderedIDs and ns.Plain(index) and orderedIDs[index]
+                    if not ns.Plain(assigned) or type(assigned) ~= "number" then assigned = nil end
+                    spellID, source, cooldownID = CooldownSpellID(frame, cooldownInfoByID, assigned, spellCache)
+                end
+                if not cooldownID and frame.GetCooldownID then
+                    local ok, value = pcall(frame.GetCooldownID, frame)
+                    if ok and ns.Plain(value) and type(value) == "number" then cooldownID = value end
+                end
+                if spellID then scan.spells = scan.spells + 1 end
+                local key = spellID and ActionHotkeyForSpell(spellID, bySpell)
+                if showKeys and not key and type(frame.GetBaseSpellID) == "function" then
+                    local ok, baseSpellID = pcall(frame.GetBaseSpellID, frame)
+                    if ok and ns.Plain(baseSpellID) then key = ActionHotkeyForSpell(baseSpellID, bySpell) end
+                end
+                if key then scan.matches = scan.matches + 1 end
+                UpdateCooldownLabel(frame, key)
+                local overlay = cooldownLabels[frame]
+                scan.details[#scan.details + 1] = ("%s | ícone=%s cooldown=%s spell=%s fonte=%s tecla=%s texto visível=%s")
+                    :format(viewerName, tostring(frame:IsVisible()), cooldownID or "-", spellID or "-",
+                        source or "-", key and key.text or "-", tostring(overlay ~= nil and overlay:IsVisible()))
+                return
+            end
+            if enabled then
+                StyleButton(frame, true)
+            elseif buttons[frame] then
+                RestoreButton(frame, buttons[frame])
+            end
+        end
+    end
+    local function VisitItem(frame)
+        if not labelsOnly then
+            StyleViewerItem(frame)
+            return
+        end
+        local ok, message = pcall(StyleViewerItem, frame)
+        if not ok then
+            scan.errors = scan.errors + 1
+            scan.firstError = scan.firstError or message
+        end
+    end
+    local function VisitTree(frame, depth)
+        if not frame or depth < 0 then return end
+        VisitItem(frame)
+        if not frame.GetChildren then return end
+        for _, child in ipairs({ frame:GetChildren() }) do VisitTree(child, depth - 1) end
+    end
+    for _, name in ipairs({ "EssentialCooldownViewer", "UtilityCooldownViewer",
+        "BuffIconCooldownViewer", "BuffBarCooldownViewer" }) do
+        viewerName = name
+        local viewer = _G[name]
+        if viewer then
+            if not cooldownManagerHooks[viewer] then
+                cooldownManagerHooks[viewer] = true
+                viewer:HookScript("OnShow", QueueCooldownHotkeys)
+                if viewer.RefreshLayout then hooksecurefunc(viewer, "RefreshLayout", QueueRefresh) end
+                if viewer.RefreshData then
+                    hooksecurefunc(viewer, "RefreshData", function(self, ids)
+                        viewerCooldownIDs[self] = ns.Plain(ids) and type(ids) == "table" and ids or nil
+                        QueueCooldownHotkeys()
+                    end)
+                end
+            end
+            orderedIDs = viewerCooldownIDs[viewer]
+            if labelsOnly and showKeys and not orderedIDs and viewer.GetCooldownIDs then
+                local ok, ids = pcall(viewer.GetCooldownIDs, viewer)
+                if ok and ns.Plain(ids) and type(ids) == "table" then orderedIDs = ids end
+            end
+            if viewer.itemFramePool then
+                for item in viewer.itemFramePool:EnumerateActive() do VisitItem(item) end
+            else
+                VisitTree(viewer, 5)
+            end
+        end
+    end
+    if labelsOnly then
+        local result = ("%d/%d ícones visíveis, %d spells, %d teclas, %d erros"):format(
+            scan.visibleItems, scan.items, scan.spells, scan.matches, scan.errors)
+        if result ~= hotkeyTrace.lastResult then
+            hotkeyTrace.lastResult = result
+            TraceHotkeyScan(result)
+        end
+    end
+end
+
+local hotkeyRefreshQueued = false
+local actionHotkeyHooks = {}
+QueueCooldownHotkeys = function()
+    if hotkeyRefreshQueued then return end
+    hotkeyRefreshQueued = true
+    C_Timer.After(0, function()
+        hotkeyRefreshQueued = false
+        if not ns.db or not ns.db.enabledActionBars or not ns.db.actionBarsCooldownHotkeys
+            or InCombatLockdown() then return end
+        local ok, message = pcall(RefreshCooldownManagerButtons, true)
+        if not ok then
+            TraceHotkeyScan("falha na atualização: " .. tostring(message))
+            geterrorhandler()(message)
+        end
+    end)
+end
+
+local function WatchActionHotkeys()
+    for _, group in ipairs(groups) do
+        for index = 1, group.count do
+            local button = _G[group.prefix .. index]
+            if button and button.UpdateHotkeys and not actionHotkeyHooks[button] then
+                actionHotkeyHooks[button] = true
+                hooksecurefunc(button, "UpdateHotkeys", QueueCooldownHotkeys)
+            end
+        end
+    end
+end
+
+function ns.PrintCooldownHotkeyStatus(verbose)
+    local visible = 0
+    for _, overlay in pairs(cooldownLabels) do
+        if overlay:IsVisible() then visible = visible + 1 end
+    end
+    local scan = lastHotkeyScan or {}
+    print(("PhalkTools CDM | Action Bars=%s | keybinds=%s | ícones=%s | ícones visíveis=%s | habilidades=%s | atalhos nas barras=%s | correspondências=%s | textos visíveis=%d")
+        :format(tostring(ns.db.enabledActionBars), tostring(ns.db.actionBarsCooldownHotkeys),
+            scan.items or "-", scan.visibleItems or "-", scan.spells or "-", scan.actionSpells or "-", scan.matches or "-", visible))
+    if scan.firstError then
+        print("PhalkTools CDM | erros nos ícones: " .. scan.errors .. " | " .. tostring(scan.firstError))
+    end
+    if verbose then
+        print(("PhalkTools CDM | combate=%s | Edit Mode=%s | atualização pendente=%s")
+            :format(tostring(InCombatLockdown()), tostring(editing), tostring(queued or hotkeyRefreshQueued)))
+        for _, line in ipairs(hotkeyTrace) do print(line) end
+        for _, line in ipairs(scan.details or {}) do print(line) end
+    end
 end
 
 local function RootFor(group)
@@ -578,6 +1060,7 @@ local function MaintainBarScale(root, state)
 end
 
 local function StyleDividers(root, state)
+    if InCombatLockdown() then return end
     if not state.active then return end
     local hide = ns.db.actionBarsHideArt
     if not hide and state.dividers then
@@ -833,17 +1316,36 @@ function ns.RefreshActionBars()
             end
         end
     end)
+    local labelsOK, labelsMessage = pcall(RefreshCooldownManagerButtons, true)
+    local cooldownOK, cooldownMessage = pcall(RefreshCooldownManagerButtons)
     refreshing = false
     if not ok then geterrorhandler()(message) end
+    if not cooldownOK then geterrorhandler()(cooldownMessage) end
+    if not labelsOK then geterrorhandler()(labelsMessage) end
     pcall(RefreshNextMeleeRings)
 end
 
 function ns.InitActionBars()
+    if ActionButtonSpellAlertManager and ActionButtonSpellAlertManager.ShowAlert then
+        hooksecurefunc(ActionButtonSpellAlertManager, "ShowAlert", function(_, button)
+            local state = buttons[button]
+            if state and state.active then AlignProcGlow(button, state) end
+        end)
+    end
+    WatchActionHotkeys()
     local events = CreateFrame("Frame")
-    for _, event in ipairs({ "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED", "ADDON_LOADED",
-        "ACTIONBAR_SLOT_CHANGED", "UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORM",
+    for _, event in ipairs({ "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED", "ADDON_LOADED",
+        "ACTIONBAR_SLOT_CHANGED", "ACTIONBAR_PAGE_CHANGED", "UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORM",
         "UPDATE_MACROS", "UPDATE_BINDINGS" }) do events:RegisterEvent(event) end
-    events:SetScript("OnEvent", QueueRefresh)
+    events:SetScript("OnEvent", function(_, event)
+        QueueRefresh()
+        if event == "PLAYER_LOGIN" or event == "ADDON_LOADED" then WatchActionHotkeys() end
+        if event == "PLAYER_ENTERING_WORLD" then
+            TraceHotkeyScan("PLAYER_ENTERING_WORLD")
+            WatchActionHotkeys()
+            C_Timer.After(1, QueueCooldownHotkeys)
+        end
+    end)
     local queuedEvents = CreateFrame("Frame")
     for _, event in ipairs({ "CURRENT_SPELL_CAST_CHANGED", "ACTIONBAR_SLOT_CHANGED",
         "UPDATE_SHAPESHIFT_FORM" }) do queuedEvents:RegisterEvent(event) end
