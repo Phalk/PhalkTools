@@ -214,6 +214,32 @@ local function StyleText(state, text, font, justify)
     text:SetJustifyH(justify)
 end
 
+local function LayoutTargetName(frame, state, name, health, width)
+    if not Usable(name) then return end
+    if not state.nameOverlay then
+        local overlay = CreateFrame("Frame", nil, frame)
+        overlay:SetFrameLevel(state.visual.power:GetFrameLevel() + 1)
+        local text = overlay:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        text:SetJustifyH("LEFT")
+        local function Sync()
+            if not state.active or not state.visual.active then return end
+            text:SetText(name:GetText())
+            overlay:SetShown(name:IsShown())
+        end
+        for _, method in ipairs({ "SetText", "SetFormattedText", "SetShown", "Show", "Hide" }) do
+            hooksecurefunc(name, method, Sync)
+        end
+        state.nameOverlay, state.nameLabel, state.syncName = overlay, text, Sync
+        table.insert(state.decorations, overlay)
+    end
+    local label = state.nameLabel
+    label:ClearAllPoints()
+    label:SetPoint("BOTTOMLEFT", health, "TOPLEFT", 0, 4)
+    label:SetWidth(math.max(20, width - 30))
+    HideArt(state, name)
+    state.syncName()
+end
+
 local function MirrorStatusText(state, bar, text)
     if not Usable(text) then return end
     state.textMirrors = state.textMirrors or {}
@@ -447,13 +473,9 @@ local function LayoutStatusHeader(frame, player, state)
         Icon(contextual.HighLevelTexture, -8, 4, 14, 14)
     end
     local name = player and _G.PlayerName or (main and main.Name) or frame.name
-    if Usable(name) then
+    if Usable(name) and (player or not (visual and visual.active)) then
         StyleText(state, name, "GameFontNormalSmall", "LEFT")
-        if InCombatLockdown() then
-            pcall(Move, state, name, "BOTTOMLEFT", health, "TOPLEFT", 0, 4, math.max(20, width - 30))
-        else
-            Move(state, name, "BOTTOMLEFT", health, "TOPLEFT", 0, 4, math.max(20, width - 30))
-        end
+        Move(state, name, "BOTTOMLEFT", health, "TOPLEFT", 0, 4, math.max(20, width - 30))
         if player and state.restLabel then
             local textWidth = name:GetStringWidth()
             if ns.Plain(textWidth) and type(textWidth) == "number" then
@@ -924,11 +946,15 @@ local function ApplyTargetVisual(frame, state, main, container, nativeHealth, na
     if visual.textOverlay then visual.textOverlay:Show() end
     HideArt(state, container)
     HideArt(state, nativePower)
-    if player then HideArt(state, frame.PlayerFrameContainer) end
-    local name = player and _G.PlayerName or (main and main.Name) or frame.name
-    local level = player and _G.PlayerLevelText or (main and main.LevelText)
-    if Usable(name) then Move(state, name, "BOTTOMLEFT", visual.health, "TOPLEFT", 0, 4, db.unitFramesWidth - 30) end
-    if Usable(level) then Move(state, level, "BOTTOMRIGHT", visual.health, "TOPRIGHT", 0, 4) end
+    if player then
+        HideArt(state, frame.PlayerFrameContainer)
+        if Usable(_G.PlayerName) then
+            Move(state, _G.PlayerName, "BOTTOMLEFT", visual.health, "TOPLEFT", 0, 4, db.unitFramesWidth - 30)
+        end
+        if Usable(_G.PlayerLevelText) then Move(state, _G.PlayerLevelText, "BOTTOMRIGHT", visual.health, "TOPRIGHT", 0, 4) end
+    else
+        LayoutTargetName(frame, state, (main and main.Name) or frame.name, visual.health, db.unitFramesWidth)
+    end
     UpdateVisualBars(visual)
     if player then
         if not state.restLabel then
@@ -1097,9 +1123,12 @@ local function MaintainTargetHealth(frame)
     local state = states[frame]
     if refreshing or restyling or not state or not state.active then return end
     if state.visual and state.visual.active then return end
+    if InCombatLockdown() then
+        state.pendingCombatLayout = true
+        return
+    end
     local _, container, health, power = Resolve(frame, false)
     if not Usable(container) or not Usable(health) then return end
-    local inCombat = InCombatLockdown()
     if not pcall(StyleTargetPredictionMask, state, container, health) then
         state.pendingCombatLayout = true
     end
@@ -1109,20 +1138,10 @@ local function MaintainTargetHealth(frame)
     if Usable(power) and not pcall(LayoutBarText, state, power, power, true) then
         state.pendingCombatLayout = true
     end
-    if not inCombat or not (health.IsProtected and health:IsProtected()) then
-        LayoutTargetHealth(state, container, health, frame, ns.db.unitFramesHidePortrait)
-        if Usable(power) and (not inCombat or not (power.IsProtected and power:IsProtected())) then
-            Move(state, power, "TOPLEFT", health, "BOTTOMLEFT", 0, -ns.db.unitFramesSpacing,
-                ns.db.unitFramesWidth, ns.db.unitFramesPowerHeight)
-        end
-    else
-        state.pendingCombatLayout = true
-        local db = ns.db
-        pcall(container.SetSize, container, db.unitFramesWidth, db.unitFramesHealthHeight)
-        pcall(health.SetSize, health, db.unitFramesWidth, db.unitFramesHealthHeight)
-        if Usable(power) then
-            pcall(power.SetSize, power, db.unitFramesWidth, db.unitFramesPowerHeight)
-        end
+    LayoutTargetHealth(state, container, health, frame, ns.db.unitFramesHidePortrait)
+    if Usable(power) then
+        Move(state, power, "TOPLEFT", health, "BOTTOMLEFT", 0, -ns.db.unitFramesSpacing,
+            ns.db.unitFramesWidth, ns.db.unitFramesPowerHeight)
     end
     local binding = state.bindings[health]
     if binding and binding.path then
@@ -1274,6 +1293,7 @@ end
 
 function ns.RefreshUnitFrames()
     if refreshing or InCombatLockdown() or not ns.db then return end
+    if ns.ReleaseUnitFrameTextureBarLayouts then ns.ReleaseUnitFrameTextureBarLayouts() end
     refreshing = true
     local ok, message = pcall(function()
         local target = _G.TargetFrame

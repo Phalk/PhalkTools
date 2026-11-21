@@ -1,6 +1,6 @@
 ## Interface: 16001, 120105
 ## Title: PhalkTools
-## Notes: Quality-of-life improvements, including buff reminders and customizable unit frames, action bars, nameplates and the Personal Resource Display.
+## Notes: Buff reminders and UI customization.
 ## Author: Phalk
 ## Version: 0.11.0
 ## SavedVariables: PhalkToolsDB
@@ -15,7 +15,6 @@ UnitFrames.lua
 TextureBars.lua
 PlayerBuffs.lua
 ActionBars.lua
-DamageMeter.lua
 Chat.lua
 Nameplates.lua
 Settings.lua

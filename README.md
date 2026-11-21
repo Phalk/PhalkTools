@@ -16,7 +16,7 @@
   - Player buffs and matching target and focus auras, with adjustable size and spacing.
   - Target combo points, aligned PvP and level indicators, and combat text above the frames.
 - **Texture Bars**
-  - Independent textures for Blizzard health, power, and cast bars.
+  - Independent textures for Blizzard health, power, cast, and Damage Meter bars.
   - Individual toggles for supported player, target, focus, and target of target bars.
 - **Action Bars and Cooldown Manager**
   - Shared icon styling for action buttons and Cooldown Manager icons.
@@ -25,11 +25,6 @@
   - Optional decorative art, keybinds, macro names, item counts, and charges.
   - Cooldown Manager keybinds mirrored from action buttons, including range colors.
   - Icon aligned cooldown shading and proc highlights.
-- **Damage Meter**
-  - Bar styles, textures, borders, class colors, and optional row icons.
-  - Adjustable row height, spacing, text size, background opacity, and window opacity.
-  - Lock and unlock from the options menu, with movement and resizing outside Edit Mode.
-  - Saved window position, size, and lock state.
 - **Chat**
   - Optional Lock and Unlock in the tab menu, drag by tab, and resize outside Edit Mode.
   - Saved window position and dimensions.
@@ -51,4 +46,3 @@
 - `/pt buffs` — buff reminder editor.
 - `/pt copy` — selectable text from the current chat tab.
 - `/pt cdm` and `/pt cdm debug` — Cooldown Manager keybind diagnostics.
-- `/pt meter` — Damage Meter layout diagnostics.

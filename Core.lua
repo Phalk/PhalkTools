@@ -65,6 +65,35 @@ ns.defaults = {
     textureBarsPlayerCast = true,
     textureBarsTargetCast = true,
     textureBarsFocusCast = true,
+    textureBarsDamageMeter = false,
+    textureBarsPlayerHealthTexture = "global",
+    textureBarsPlayerPowerTexture = "global",
+    textureBarsTargetHealthTexture = "global",
+    textureBarsTargetPowerTexture = "global",
+    textureBarsFocusHealthTexture = "global",
+    textureBarsFocusPowerTexture = "global",
+    textureBarsTargetOfTargetHealthTexture = "global",
+    textureBarsPlayerCastTexture = "global",
+    textureBarsTargetCastTexture = "global",
+    textureBarsFocusCastTexture = "global",
+    textureBarsDamageMeterTexture = "global",
+    textureBarsPlayerCastCustomColor = false,
+    textureBarsPlayerCastColorR = 1,
+    textureBarsPlayerCastColorG = 0.7,
+    textureBarsPlayerCastColorB = 0,
+    textureBarsPlayerHealthHeight = 0,
+    textureBarsPlayerPowerHeight = 0,
+    textureBarsTargetHealthHeight = 0,
+    textureBarsTargetPowerHeight = 0,
+    textureBarsFocusHealthHeight = 0,
+    textureBarsFocusPowerHeight = 0,
+    textureBarsTargetOfTargetHealthHeight = 0,
+    textureBarsPlayerCastHeight = 0,
+    textureBarsTargetCastHeight = 0,
+    textureBarsFocusCastHeight = 0,
+    textureBarsPlayerPowerSpacing = -1,
+    textureBarsTargetPowerSpacing = -1,
+    textureBarsFocusPowerSpacing = -1,
     enabledNameplates = false,
     nameplatesFriendly = true,
     nameplatesEnemy = true,
@@ -88,23 +117,10 @@ ns.defaults = {
     nameplatesNameFontSize = 0,
     nameplatesComboPoints = true,
     enabledPersonalResource = false,
-    enabledDamageMeter = false,
-    damageMeterUnlocked = false,
-    damageMeterStyle = "default",
-    damageMeterBorder = "default",
-    damageMeterTexture = "default",
-    damageMeterBarHeight = 25,
-    damageMeterClassColors = true,
-    damageMeterIcons = true,
-    damageMeterBackground = 100,
-    damageMeterOpacity = 100,
-    damageMeterSpacing = 2,
-    damageMeterTextSize = 12,
     chatUnlocked = false,
     chatLockMenu = true,
     chatCopyText = true,
     chatKeepHistory = false,
-    damageMeterLockMenu = true,
     personalResourceHideFull = true,
     personalResourceBorder = "default",
     personalResourceTexture = "default",
@@ -170,7 +186,6 @@ local modules = {
     { "TextureBars", "InitTextureBars", "RefreshTextureBars" },
     { "PlayerBuffs", "InitPlayerFrameBuffs", "RefreshPlayerFrameBuffs" },
     { "ActionBars", "InitActionBars", "RefreshActionBars" },
-    { "DamageMeter", "InitDamageMeter", "RefreshDamageMeter" },
     { "Chat", "InitChat", "RefreshChat" },
     { "Nameplates", "InitNameplates", "RefreshNameplates" },
 }
@@ -190,6 +205,14 @@ end
 local function Start()
     PhalkToolsDB = type(PhalkToolsDB) == "table" and PhalkToolsDB or {}
     ns.db = PhalkToolsDB
+    ns.db.enabledDamageMeter = nil
+    for key in pairs(ns.db) do
+        if type(key) == "string" and (key:match("^damageMeter")
+            or (key:match("^textureBarsDamageMeter") and key ~= "textureBarsDamageMeter"
+                and key ~= "textureBarsDamageMeterTexture")) then
+            ns.db[key] = nil
+        end
+    end
     if ns.db.realmNamesPreviousValue == "1" and C_CVar then
         local function RestoreRealmNameCVar()
             local ok, current = pcall(C_CVar.GetCVar, "nameplateShowFriendlyRealmName")
@@ -302,8 +325,6 @@ SlashCmdList.PHALKTOOLS = function(message)
         ns.PrintCooldownHotkeyStatus()
     elseif message and message:match("^%s*cdm%s+debug%s*$") and ns.PrintCooldownHotkeyStatus then
         ns.PrintCooldownHotkeyStatus(true)
-    elseif message and message:match("^%s*meter%s*$") and ns.PrintDamageMeterStatus then
-        ns.PrintDamageMeterStatus()
     elseif message and message:match("^%s*copy%s*$") and ns.CopyCurrentChat then
         ns.CopyCurrentChat()
     else

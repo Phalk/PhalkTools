@@ -21,6 +21,9 @@ function ns.OpenCombatSettings()
         title:SetText("PhalkTools")
         local help = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         help:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -10)
+        help:SetPoint("RIGHT", panel, "RIGHT", -18, 0)
+        help:SetJustifyH("LEFT")
+        help:SetWordWrap(true)
         help:SetText("Alterações são aplicadas ao sair de combate.")
         local close = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
         close:SetPoint("TOPRIGHT")
@@ -60,7 +63,6 @@ function ns.RegisterSettings()
     local units, unitsLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Unit Frames")
     local textureBars, textureBarsLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Texture Bars")
     local plates, platesLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Nameplates")
-    local meter, meterLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Damage Meter")
     local chat, chatLayout = Settings.RegisterVerticalLayoutSubcategory(main, "Chat")
 
     local function Header(layout, title)
@@ -81,27 +83,29 @@ function ns.RegisterSettings()
 
     local function Checkbox(category, key, label, help)
         local setting = Register(category, key, label)
-        Settings.CreateCheckbox(category, setting, help)
-        return setting
+        return setting, Settings.CreateCheckbox(category, setting, help)
     end
 
     local function Dropdown(category, key, label, values, help)
         local setting = Register(category, key, label)
-        Settings.CreateDropdown(category, setting, function()
+        return Settings.CreateDropdown(category, setting, function()
             local options = Settings.CreateControlTextContainer()
             for _, entry in ipairs(values) do options:Add(entry[1], entry[2]) end
             return options:GetData()
         end, help)
     end
 
-    local function PixelSlider(category, key, label, low, high, help)
+    local function PixelSlider(category, key, label, low, high, help, nativeValue)
         local setting = Register(category, key, label)
         local options = Settings.CreateSliderOptions(low, high, 1)
         if options.SetLabelFormatter and MinimalSliderWithSteppersMixin then
             options:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right,
-                function(value) return tostring(math.floor(value)) .. " px" end)
+                function(value)
+                    if value == nativeValue then return "WoW default" end
+                    return tostring(math.floor(value)) .. " px"
+                end)
         end
-        Settings.CreateSlider(category, setting, options, help)
+        return Settings.CreateSlider(category, setting, options, help)
     end
 
     Header(mainLayout, "FEATURES | Check to enable")
@@ -157,30 +161,68 @@ function ns.RegisterSettings()
     PixelSlider(units, "unitFramesHealthHeight", "Health bar height", 10, 40, "Height of the health bar.")
     PixelSlider(units, "unitFramesPowerHeight", "Power bar height", 6, 24, "Height of the power bar.")
     PixelSlider(units, "unitFramesSpacing", "Bar spacing", 0, 20, "Distance between the health and power bars.")
-    Header(unitsLayout, "Position is controlled in Edit Mode. Changes made in combat are applied afterward. Disabling restores the previous appearance.")
+    Header(unitsLayout, "Use WoW Edit Mode to move unit frames.")
 
     local textureBarsOn = Checkbox(main, "enabledTextureBars", "Texture Bars",
         "Applies a separate bar texture to selected Blizzard unit and cast bars. Open the subcategory to choose bars.")
     Header(textureBarsLayout, "TEXTURE BARS")
     Settings.CreateCheckbox(textureBars, textureBarsOn,
         "Enables texture styling independently of the Unit Frames module.")
-    Dropdown(textureBars, "textureBarsTexture", "Texture", {
+    local textureChoices = {
         { "flat", "Flat" }, { "smooth", "Smooth" }, { "raid", "Raid Bar" },
         { "gradient", "Gradient" }, { "gloss", "Glossy" }, { "soft", "Satin" },
         { "metal", "Metallic" }, { "striped", "Striped" }, { "beveled", "Beveled" },
-    }, "Choose the fill texture applied to selected bars.")
+    }
+    Dropdown(textureBars, "textureBarsTexture", "Global texture", textureChoices,
+        "Applies to enabled bars that use the global texture.")
+    local barTextureChoices = { { "global", "Use global texture" } }
+    for _, option in ipairs(textureChoices) do table.insert(barTextureChoices, option) end
+    local function AddTextureBar(key, label, isUnitBar, hasSpacing)
+        local help = isUnitBar and "Available when PhalkTools Unit Frames does not style this frame."
+            or "Enables texture styling for this bar."
+        local _, toggle = Checkbox(textureBars, key, label, help)
+        local selector = Dropdown(textureBars, key .. "Texture", label .. " texture", barTextureChoices,
+            "Uses the global texture or a texture specific to this bar.")
+        local height, spacing
+        height = PixelSlider(textureBars, key .. "Height", label .. " height", 0, 60,
+            "Sets the height when texture styling is enabled for this bar. Zero uses the native height.", 0)
+        if hasSpacing then
+            spacing = PixelSlider(textureBars, key .. "Spacing", label .. " spacing", -1, 25,
+                "Sets the gap below the health bar when texture styling is enabled for this resource bar. The minimum uses the native gap.", -1)
+        end
+        if isUnitBar then
+            local function IsAvailable()
+                return not ns.UnitFramesOwnTextureBar(key)
+            end
+            toggle:AddModifyPredicate(IsAvailable)
+            selector:AddModifyPredicate(IsAvailable)
+            height:AddModifyPredicate(IsAvailable)
+            if spacing then spacing:AddModifyPredicate(IsAvailable) end
+        end
+    end
     Header(textureBarsLayout, "UNIT BARS")
     for _, option in ipairs({
-        { "textureBarsPlayerHealth", "Player health" }, { "textureBarsPlayerPower", "Player power" },
-        { "textureBarsTargetHealth", "Target health" }, { "textureBarsTargetPower", "Target power" },
-        { "textureBarsFocusHealth", "Focus health" }, { "textureBarsFocusPower", "Focus power" },
+        { "textureBarsPlayerHealth", "Player health" }, { "textureBarsPlayerPower", "Player power", true },
+        { "textureBarsTargetHealth", "Target health" }, { "textureBarsTargetPower", "Target power", true },
+        { "textureBarsFocusHealth", "Focus health" }, { "textureBarsFocusPower", "Focus power", true },
         { "textureBarsTargetOfTargetHealth", "Target of target health" },
-    }) do Checkbox(textureBars, option[1], option[2], "Applies the selected texture to this Blizzard status bar.") end
+    }) do AddTextureBar(option[1], option[2], true, option[3]) end
     Header(textureBarsLayout, "CAST BARS")
     for _, option in ipairs({
         { "textureBarsPlayerCast", "Player cast bar" }, { "textureBarsTargetCast", "Target cast bar" },
         { "textureBarsFocusCast", "Focus cast bar" },
-    }) do Checkbox(textureBars, option[1], option[2], "Applies the selected texture to this Blizzard cast bar.") end
+    }) do AddTextureBar(option[1], option[2]) end
+    Checkbox(textureBars, "textureBarsPlayerCastCustomColor", "Custom player cast color",
+        "Uses a custom color for the player cast bar when its texture is enabled.")
+    if CreateSettingsButtonInitializer then
+        textureBarsLayout:AddInitializer(CreateSettingsButtonInitializer("Player cast color", "Choose color...",
+            ns.OpenPlayerCastColorPicker, "Choose the color of the player cast fill.", false))
+    end
+    Header(textureBarsLayout, "DAMAGE METER")
+    Checkbox(textureBars, "textureBarsDamageMeter", "Damage Meter bars",
+        "Applies the selected texture to the Blizzard Damage Meter.")
+    Dropdown(textureBars, "textureBarsDamageMeterTexture", "Damage Meter texture", barTextureChoices,
+        "Uses the global texture or a texture specific to the Damage Meter.")
     Header(textureBarsLayout, "Changes made in combat are applied when combat ends.")
 
     local actionsOn = Checkbox(main, "enabledActionBars", "Action Bars",
@@ -232,38 +274,7 @@ function ns.RegisterSettings()
     ActionSlider("actionBarsOpacity", "Opacity", 50, 100, "%", "Opacity of the action buttons.")
     ActionSlider("actionBarsZoom", "Icon zoom", 0, 15, "%", "Crops the inner margins of spell icons.")
     ActionSlider("actionBarsFontSize", "Text size", 8, 18, " px", "Size of keybinds, names and counts.")
-    Header(actionsLayout, "Position, rows and spacing are controlled in WoW Edit Mode. Changes made in combat are applied afterward. Disabling restores the previous appearance.")
-
-    local meterOn = Checkbox(main, "enabledDamageMeter", "Damage Meter",
-        "Customizes Blizzard's Damage Meter. Open the subcategory to adjust its appearance and unlock movement.")
-    Header(meterLayout, "DAMAGE METER")
-    Settings.CreateCheckbox(meter, meterOn, "Enables Damage Meter styling and settings.")
-    Checkbox(meter, "damageMeterLockMenu", "Add Lock / Unlock to the options context menu",
-        "Adds Lock / Unlock to the Damage Meter options menu.")
-    Dropdown(meter, "damageMeterStyle", "Visual style", {
-        { "default", "WoW Default" }, { "minimal", "Thin" }, { "bordered", "Bordered" },
-    }, "Select the built-in Damage Meter presentation style.")
-    Dropdown(meter, "damageMeterBorder", "Bar borders", {
-        { "default", "WoW Default" }, { "none", "No borders" },
-        { "thin", "Thin black" }, { "thick", "Thick black" },
-    }, "Choose the outline around each Damage Meter bar.")
-    Dropdown(meter, "damageMeterTexture", "Bar texture", {
-        { "default", "WoW Default" }, { "flat", "Flat" }, { "smooth", "Smooth" },
-        { "raid", "Raid Bar" }, { "gradient", "Gradient" }, { "gloss", "Glossy" },
-        { "soft", "Satin" }, { "metal", "Metallic" }, { "striped", "Striped" }, { "beveled", "Beveled" },
-    }, "Changes the fill texture of Damage Meter rows.")
-    Checkbox(meter, "damageMeterClassColors", "Class colors", "Uses class colors for player rows.")
-    PixelSlider(meter, "damageMeterBarHeight", "Bar height", 12, 45, "Sets the height of Damage Meter rows.")
-    Checkbox(meter, "damageMeterIcons", "Show bar icons", "Shows spell and ability icons in Damage Meter rows.")
-    PixelSlider(meter, "damageMeterBackground", "Background opacity", 0, 100,
-        "Adjusts the Damage Meter background transparency.")
-    PixelSlider(meter, "damageMeterOpacity", "Window opacity", 0, 100,
-        "Adjusts the opacity of the Damage Meter window.")
-    PixelSlider(meter, "damageMeterSpacing", "Bar spacing", 0, 12,
-        "Sets the spacing between Damage Meter rows.")
-    PixelSlider(meter, "damageMeterTextSize", "Text size", 8, 20,
-        "Sets the text size used by Damage Meter rows.")
-    Header(meterLayout, "Changes made in combat are applied when combat ends.")
+    Header(actionsLayout, "Use WoW Edit Mode for bar layout.")
 
     Header(chatLayout, "CHAT WINDOW")
     local chatOn = Checkbox(main, "chatLockMenu", "Chat", "Restores Lock / Unlock in the chat tab menu.")
@@ -324,7 +335,7 @@ function ns.RegisterSettings()
     Header(platesLayout, "COMBO POINTS")
     Checkbox(plates, "nameplatesComboPoints", "Show combo points on target nameplate",
         "Shows your current combo points as a compact row on the current target's nameplate.")
-    Header(platesLayout, "Restricted nameplates retain their native appearance. Geometry changes are applied after combat.")
+    Header(platesLayout, "Restricted nameplates keep their native appearance.")
 
     Header(personalLayout, "PERSONAL RESOURCE DISPLAY")
     Settings.CreateCheckbox(personal, personalOn, "Enables customization of the default Personal Resource Display.")
@@ -394,7 +405,7 @@ function ns.RegisterSettings()
         Settings.CreateCheckbox(personal, Native(option[1], option[2], option[3]),
             "Controls the Personal Resource Display. Available resources depend on class and specialization.")
     end
-    Header(personalLayout, "PhalkTools saves these settings and reapplies them when entering the game or changing layouts. Position is controlled in WoW Edit Mode.")
+    Header(personalLayout, "Use WoW Edit Mode to move the display.")
 
     Header(remindersLayout, "BUFF REMINDERS")
     Settings.CreateCheckbox(reminders, remindersOn,
@@ -405,7 +416,7 @@ function ns.RegisterSettings()
     end
     Checkbox(reminders, "reminderSound", "Sound for missing buffs",
         "Plays a sound when a new missing buff is detected, with a minimum interval of 90 seconds.")
-    Header(remindersLayout, "Left-click to cast. Drag the title or right-drag a reminder to move the panel. Changes made during combat are applied afterward.")
+    Header(remindersLayout, "Left-click to cast. Drag the title to move the panel.")
 
     Settings.RegisterAddOnCategory(main)
     ns.categoryID = main:GetID()
