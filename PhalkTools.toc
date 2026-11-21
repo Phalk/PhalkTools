@@ -2,7 +2,7 @@
 ## Title: PhalkTools
 ## Notes: Buff reminders and UI customization.
 ## Author: Phalk
-## Version: 0.11.0
+## Version: 0.12.0
 ## SavedVariables: PhalkToolsDB
 ## Category: Miscellaneous
 ## IconTexture: Interface\Icons\INV_Misc_Herb_01
